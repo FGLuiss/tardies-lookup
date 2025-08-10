@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Consulta de permisos y tardanzas</title>
+  <!--
+    🚀 Instrucciones rápidas (también al final del archivo):
+    1) Publica tu Google Sheet como CSV (Archivo → Publicar en la web → Hoja Registro → CSV) y copia el enlace público.
+    2) Pega ese enlace en el cuadro "CSV URL" de esta página y haz clic en "Cargar".
+    3) Opcionalmente, cambia la constante CSV_URL más abajo para fijarlo por defecto y vuelve a subir a GitHub Pages.
+  -->
+
+  <!-- PapaParse para parsear CSV robustamente -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root{
+      --bg:#f7f9fc; --card:#ffffff; --ink:#0f172a; --muted:#64748b; --accent:#0ea5e9; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444; --border:#e2e8f0;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,"Noto Sans",sans-serif;background:var(--bg);color:var(--ink)}
+    header{position:sticky;top:0;background:linear-gradient(180deg,#0ea5e9 0%, #0284c7 100%);color:#fff;padding:16px 20px;z-index:10}
+    header h1{margin:0;font-size:20px}
+    .wrap{max-width:1100px;margin:16px auto;padding:0 16px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 8px 20px rgba(2,8,23,.04);padding:14px}
+    .controls{display:grid;gap:10px;grid-template-columns:1fr;}
+    @media(min-width:720px){.controls{grid-template-columns:2fr 1fr 1fr 1fr auto}}
+    label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+    input[type="text"], select, input[type="date"], input[type="url"]{
+      width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff;color:var(--ink);font-size:14px
+    }
+    .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+    button{border:0;border-radius:10px;padding:10px 14px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .tiny{font-size:12px;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);padding:6px 10px;border-radius:999px;background:#fff}
+    .pill.ok{border-color:#c7f9cc;background:#ecfdf5}
+    .pill.warn{border-color:#fde68a;background:#fffbeb}
+    .pill.bad{border-color:#fecaca;background:#fef2f2}
+    table{width:100%;border-collapse:separate;border-spacing:0;margin-top:10px}
+    thead th{position:sticky;top:64px;background:#fff;border-bottom:1px solid var(--border);text-align:left;padding:10px;font-size:12px;color:var(--muted);z-index:5}
+    tbody td{border-bottom:1px solid var(--border);padding:12px;font-size:14px}
+    tr:hover td{background:#fafcff}
+    .badge{display:inline-block;border-radius:999px;padding:4px 8px;font-size:12px;border:1px solid var(--border)}
+    .badge.today{background:#eef9ff;border-color:#bae6fd}
+    .status{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .footer{margin:18px auto 48px;max-width:1100px;padding:0 16px;color:var(--muted);font-size:12px}
+    details summary{cursor:pointer}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Consulta de permisos y tardanzas</h1>
+    <div class="tiny">Pegue el enlace CSV publicado del Google Sheet, o cargue el demo.</div>
+  </header>
+
+  <div class="wrap">
+    <div class="card" id="loaderCard">
+      <div class="row" style="align-items:flex-end; gap:14px">
+        <div style="flex:2 1 300px">
+          <label for="csvUrl">CSV URL</label>
+          <input id="csvUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv" />
+        </div>
+        <div>
+          <button id="btnLoad">Cargar</button>
+        </div>
+        <div class="tiny" style="flex:1 1 180px">O suba un archivo CSV local: <input type="file" id="csvFile" accept=".csv" /></div>
+        <div>
+          <button id="btnDemo" title="Carga 3 registros de ejemplo">Cargar demo</button>
+        </div>
+      </div>
+      <div class="tiny" style="margin-top:8px">Formato esperado: columnas <code>Fecha, Estudiante, Curso, Tipo, Razón, Firmado_por</code> (Fecha en AAAA-MM-DD).</div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="controls">
+        <div>
+          <label for="q">Buscar por nombre</label>
+          <input id="q" type="text" placeholder="Nombre contiene… (ej. Laura)" />
+        </div>
+        <div>
+          <label for="curso">Curso</label>
+          <select id="curso"><option value="">Todos</option></select>
+        </div>
+        <div>
+          <label for="tipo">Tipo</label>
+          <select id="tipo">
+            <option value="">Todos</option>
+            <option value="Tardanza">Tardanza</option>
+            <option value="Salida temprana">Salida temprana</option>
+          </select>
+        </div>
+        <div>
+          <label for="fecha">Fecha</label>
+          <input id="fecha" type="date" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="pill" style="gap:8px">
+            <input type="checkbox" id="soloHoy" /> <label for="soloHoy" style="margin:0;cursor:pointer">Solo hoy</label>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:10px" class="status" id="statusArea">
+        <span class="tiny">Estado: esperando datos…</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Estudiante</th>
+            <th>Curso</th>
+            <th>Tipo</th>
+            <th>Razón</th>
+            <th>Firmado por</th>
+            <th>Hoy</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="tiny" id="count"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <details>
+      <summary>¿Cómo publicar el CSV desde Google Sheets?</summary>
+      <ol>
+        <li>En tu Google Sheet, asegúrate de que la hoja se llama <strong>Registro</strong> y tiene las columnas: <code>Fecha, Estudiante, Curso, Tipo, Razón, Firmado_por</code>.</li>
+        <li>Ve a <em>Archivo → Publicar en la web</em>.</li>
+        <li>Elige la hoja <strong>Registro</strong> y formato <strong>CSV</strong>. Copia el enlace público que te aparece.</li>
+        <li>En esta página, pega el enlace en <strong>CSV URL</strong> y pulsa <strong>Cargar</strong>. ¡Listo!</li>
+        <li>Si quieres fijar el enlace para todos: edita este archivo y cambia la constante <code>CSV_URL</code> en el bloque &lt;script&gt;.</li>
+      </ol>
+    </details>
+  </div>
+
+  <script>
+    // 🔧 Si deseas fijar por defecto tu CSV publicado, pega aquí tu URL:
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSmMoR-TFZCKw_LZoq5BIqcWgUTKm9dylaglybVB34rA4B9SvcXmW1fH20Jlq6LT1C8S2F8j-_82tL5/pub?gid=76552702&single=true&output=csv"; // ej.: "https://docs.google.com/spreadsheets/d/e/XXXX/pub?output=csv"
+
+    // Utilidades de fecha (zona local del navegador)
+    function hoyISO(){
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+
+    const state = {
+      rows: [], // {Fecha,Estudiante,Curso,Tipo,Razón,Firmado_por}
+      filtered: [],
+      cursos: new Set(),
+    };
+
+    const dom = {
+      q: document.getElementById('q'),
+      curso: document.getElementById('curso'),
+      tipo: document.getElementById('tipo'),
+      fecha: document.getElementById('fecha'),
+      soloHoy: document.getElementById('soloHoy'),
+      tbody: document.getElementById('tbody'),
+      count: document.getElementById('count'),
+      statusArea: document.getElementById('statusArea'),
+      csvUrl: document.getElementById('csvUrl'),
+      btnLoad: document.getElementById('btnLoad'),
+      btnDemo: document.getElementById('btnDemo'),
+      csvFile: document.getElementById('csvFile'),
+    };
+
+    dom.fecha.value = hoyISO();
+
+    function setStatus(msg, kind=''){
+      dom.statusArea.innerHTML = `<span class="tiny">${msg}</span>`;
+    }
+
+    function normalizeRow(r){
+      return {
+        Fecha: (r['Fecha']||'').trim(),
+        Estudiante: (r['Estudiante']||'').trim(),
+        Curso: (r['Curso']||'').trim(),
+        Tipo: (r['Tipo']||'').trim(),
+        Razón: (r['Razón']||r['Razon']||'').trim(),
+        Firmado_por: (r['Firmado_por']||r['Firmado por']||'').trim()
+      };
+    }
+
+    function loadFromUrl(url){
+      if(!url) return setStatus('Por favor, pega una URL CSV válida.');
+      setStatus('Cargando CSV…');
+      Papa.parse(url+ (url.includes('?')?'&':'?') + 'ts=' + Date.now(), {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: (res)=>{
+          const rows = res.data.map(normalizeRow).filter(r=>r.Fecha && r.Estudiante);
+          applyData(rows);
+          setStatus('Datos cargados desde URL.');
+        },
+        error: (err)=>{
+          console.error(err); setStatus('Error al cargar el CSV. Revisa el enlace público.');
+        }
+      });
+    }
+
+    function loadFromFile(file){
+      if(!file) return; setStatus('Leyendo archivo…');
+      Papa.parse(file, {
+        header:true, skipEmptyLines:true,
+        complete: (res)=>{ const rows = res.data.map(normalizeRow).filter(r=>r.Fecha && r.Estudiante); applyData(rows); setStatus('Datos cargados desde archivo.'); },
+        error: (err)=>{ console.error(err); setStatus('No se pudo leer el CSV local.'); }
+      });
+    }
+
+    function loadDemo(){
+      const today = hoyISO();
+      const d = new Date();
+      const y = new Date(d.getTime()-86400000).toISOString().slice(0,10);
+      const yy = new Date(d.getTime()-2*86400000).toISOString().slice(0,10);
+      const demo = [
+        {Fecha: today, Estudiante: 'María Fernanda López', Curso: '2A', Tipo: 'Tardanza', Razón: 'Transporte con retraso', Firmado_por: 'Coordinación Académica'},
+        {Fecha: y, Estudiante: 'Juan Sebastián Díaz', Curso: '2B', Tipo: 'Salida temprana', Razón: 'Cita médica', Firmado_por: 'Doc. Andrés Gómez'},
+        {Fecha: yy, Estudiante: 'Laura Sofía Martínez', Curso: '2C', Tipo: 'Tardanza', Razón: 'Clima', Firmado_por: 'Rectoría'},
+      ];
+      applyData(demo);
+      setStatus('Demo cargada (3 registros).');
+    }
+
+    function applyData(rows){
+      state.rows = rows;
+      state.cursos = new Set(rows.map(r=>r.Curso).filter(Boolean).sort());
+      renderCursos();
+      filterAndRender();
+    }
+
+    function renderCursos(){
+      const current = dom.curso.value;
+      dom.curso.innerHTML = '<option value="">Todos</option>' + Array.from(state.cursos).map(c=>`<option value="${c}">${c}</option>`).join('');
+      if([...state.cursos].includes(current)) dom.curso.value = current;
+    }
+
+    function filterAndRender(){
+      const q = dom.q.value.trim().toLowerCase();
+      const curso = dom.curso.value;
+      const tipo = dom.tipo.value;
+      const soloHoy = dom.soloHoy.checked;
+      const fecha = soloHoy ? hoyISO() : (dom.fecha.value || '');
+
+      const rows = state.rows.filter(r=>{
+        if(q && !r.Estudiante.toLowerCase().includes(q)) return false;
+        if(curso && r.Curso !== curso) return false;
+        if(tipo && r.Tipo !== tipo) return false;
+        if(fecha && r.Fecha !== fecha) return false;
+        return true;
+      });
+
+      state.filtered = rows;
+      renderTable(rows);
+      renderBadges(rows);
+    }
+
+    function renderTable(rows){
+      const today = hoyISO();
+      dom.tbody.innerHTML = rows.map(r=>{
+        const isToday = r.Fecha === today;
+        return `<tr>
+          <td>${r.Fecha}</td>
+          <td>${escapeHtml(r.Estudiante)}</td>
+          <td>${escapeHtml(r.Curso)}</td>
+          <td>${escapeHtml(r.Tipo)}</td>
+          <td>${escapeHtml(r.Razón)}</td>
+          <td>${escapeHtml(r.Firmado_por)}</td>
+          <td>${isToday ? '<span class="badge today">Hoy</span>' : ''}</td>
+        </tr>`;
+      }).join('');
+      dom.count.textContent = `${rows.length} registro(s)`;
+    }
+
+    function renderBadges(rows){
+      const today = hoyISO();
+      const q = dom.q.value.trim().toLowerCase();
+      let chips = [];
+      if(q){
+        const tieneTardeHoy = state.rows.some(r=> r.Estudiante.toLowerCase().includes(q) && r.Fecha===today && r.Tipo.toLowerCase()==='tardanza');
+        const tieneAlgoHoy = state.rows.some(r=> r.Estudiante.toLowerCase().includes(q) && r.Fecha===today);
+        if(tieneTardeHoy){ chips.push(`<span class="pill bad">⚠️ Tardanza HOY</span>`); }
+        else if(tieneAlgoHoy){ chips.push(`<span class="pill warn">ℹ️ Registro HOY</span>`); }
+        else{ chips.push(`<span class="pill ok">✅ Sin registros HOY</span>`); }
+      }
+      dom.statusArea.innerHTML = chips.join(' ') || '<span class="tiny">Use los filtros para consultar.</span>';
+    }
+
+    function escapeHtml(str=''){
+      return str.replace(/[&<>"']/g, s=>({"&":"&amp;","<":"&lt;",".">":"&gt;","\"":"&quot;","'":"&#39;"}[s]||s));
+    }
+
+    // Debounce para búsqueda
+    function debounce(fn, ms){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); } }
+
+    // Eventos
+    dom.q.addEventListener('input', debounce(filterAndRender, 150));
+    dom.curso.addEventListener('change', filterAndRender);
+    dom.tipo.addEventListener('change', filterAndRender);
+    dom.fecha.addEventListener('change', ()=>{ dom.soloHoy.checked=false; filterAndRender(); });
+    dom.soloHoy.addEventListener('change', ()=>{ if(dom.soloHoy.checked){ dom.fecha.value=hoyISO(); } filterAndRender(); })
+
+    dom.btnLoad.addEventListener('click', ()=> loadFromUrl(dom.csvUrl.value.trim()));
+    dom.csvFile.addEventListener('change', (e)=> loadFromFile(e.target.files?.[0]));
+    dom.btnDemo.addEventListener('click', loadDemo);
+
+    // Si definiste CSV_URL arriba, precárgalo
+    window.addEventListener('DOMContentLoaded', ()=>{
+      if(CSV_URL){ dom.csvUrl.value = CSV_URL; loadFromUrl(CSV_URL); }
+    });
+      // Fix escapeHtml mapping (override)
+    function escapeHtml(str=''){
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      return str.replace(/[&<>"']/g, s => map[s] || s);
+    }
+  </script>
+</body>
+</html>
